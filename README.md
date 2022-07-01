@@ -1,4 +1,4 @@
-# **Benchmarking the Robustness of Deep Neural Networks to Common  Corruptions in Digital Pathology**. [[`https://arxiv.org/abs/2206.14973`]](path)
+# **Benchmarking the Robustness of Deep Neural Networks to Common  Corruptions in Digital Pathology**. [[`arxiv`]](https://arxiv.org/abs/2206.14973)
 
 
 
