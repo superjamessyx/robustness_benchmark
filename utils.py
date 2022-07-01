@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+from visdom import Visdom
+import wandb
 import os
 import torch.utils.data as data
 from PIL import Image
@@ -9,7 +11,14 @@ from wand.image import Image as WandImage
 from wand.api import library as wandlibrary
 from scipy.ndimage import zoom as scizoom
 from skimage import color
-
+from difflib import SequenceMatcher
+import torch.nn as nn
+import torch.nn.functional as F
+import sklearn.covariance
+import torchvision.datasets as dset
+import torchvision.transforms as trn
+from PIL import ImageFilter
+import random
 
 def metrics(prediction, target):
 
@@ -32,6 +41,8 @@ def metrics(prediction, target):
     return {'accuracy': accuracy, 'precision': precision, 'recall': recall, 'f1': f1, 'specificity': specificity}
 
 
+
+
 def clipped_zoom(img, zoom_factor):
     h = img.shape[0]
     # ceil crop height(= crop width)
@@ -44,6 +55,18 @@ def clipped_zoom(img, zoom_factor):
 
     return img[trim_top:trim_top + h, trim_top:trim_top + h]
 
+
+
+class Wandb_Writer(object):
+
+    def __init__(self, project_name='robustness', group_name='basline'):
+        self.wandb = wandb.init(project=project_name, group=group_name, entity="dazhangyu123", save_code=True)
+        self.ckpt_pth = self.wandb.dir[:-5] + 'saved_models'
+        os.makedirs(self.ckpt_pth, exist_ok=True)
+
+
+    def log(self, var_name, var, step):
+        self.wandb.log({var_name: var}, step=step)
 
 def disk(radius, alias_blur=0.1, dtype=np.float32):
     if radius <= 8:
@@ -58,6 +81,8 @@ def disk(radius, alias_blur=0.1, dtype=np.float32):
 
     # supersample disk to antialias
     return cv2.GaussianBlur(aliased_disk, ksize=ksize, sigmaX=alias_blur)
+
+
 
 
 def pil_loader(path):
@@ -85,7 +110,6 @@ def default_loader(path):
 class MotionImage(WandImage):
     def motion_blur(self, radius=0.0, sigma=0.0, angle=0.0):
         wandlibrary.MagickMotionBlurImage(self.wand, radius, sigma, angle)
-
 
 def find_classes(dir):
     classes = [d for d in os.listdir(dir) if os.path.isdir(os.path.join(dir, d))]
@@ -124,6 +148,37 @@ def is_image_file(filename):
     return any(filename_lower.endswith(ext) for ext in IMG_EXTENSIONS)
 
 
+class PartialImageFolder(data.Dataset):
+    def __init__(self, root, ratio=1.0, transform=None, target_transform=None,
+                 loader=default_loader):
+        classes, class_to_idx = find_classes(root)
+        imgs = make_dataset(root, class_to_idx, ratio)
+        if len(imgs) == 0:
+            raise (RuntimeError("Found 0 images in subfolders of: " + root + "\n"
+                                                                             "Supported image extensions are: " + ",".join(
+                IMG_EXTENSIONS)))
+
+        self.root = root
+        self.imgs = imgs
+        self.classes = classes
+        self.class_to_idx = class_to_idx
+        self.idx_to_class = {v: k for k, v in class_to_idx.items()}
+        self.transform = transform
+        self.target_transform = target_transform
+        self.loader = loader
+
+    def __getitem__(self, index):
+        path, target = self.imgs[index]
+        img = self.loader(path)
+        if self.transform is not None:
+            img = self.transform(img)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target
+
+    def __len__(self):
+        return len(self.imgs)
 
 
 class DistortImageFolder(data.Dataset):
@@ -275,6 +330,8 @@ class Distortions(object):
         return (np.clip(x, 0, 1) * 255).astype(np.uint8)
 
     def saturate(self, x, severity=1):
+        # c = [(0.3, 0), (0.1, 0), (2, 0), (5, 0.1), (20, 0.2)][severity - 1]
+        # c = [(0.3, 0), (0.1, 0), (2, 0), (5, 0.1), (20, 0.2)][severity - 1]
         c = [.05, .1, .15, .2, .25][severity - 1]
 
         x = np.array(x) / 255.
@@ -285,7 +342,8 @@ class Distortions(object):
         return (np.clip(x, 0, 1) * 255).astype(np.uint8)
 
     def hue(self, x, severity=1):
-        c = [.05, .1, .15, .2, .25][severity - 1]
+        # this implementation is unreliable and needs debug
+        c = [.02, .04, .06, .08, .1][severity - 1]
 
         x = np.array(x) / 255.
         x = color.rgb2hsv(x)
@@ -295,12 +353,166 @@ class Distortions(object):
         return (np.clip(x, 0, 1) * 255).astype(np.uint8)
 
 
+class AddGaussianNoise(object):
+    def __init__(self, mean=0., std=1.):
+        self.std = std
+        self.mean = mean
+
+    def __call__(self, tensor):
+        return tensor + torch.randn(tensor.size()) * self.std + self.mean
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
+
+
+class GaussianBlur(object):
+    """Gaussian blur augmentation in SimCLR https://arxiv.org/abs/2002.05709"""
+
+    def __init__(self, sigma=[.1, 2.]):
+        self.sigma = sigma
+
+    def __call__(self, x):
+        sigma = random.uniform(self.sigma[0], self.sigma[1])
+        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
+        return x
+
+__all__ = ["Registry"]
+
+
+class Registry:
+    """A registry providing name -> object mapping, to support
+    custom modules.
+
+    To create a registry (e.g. a backbone registry):
+
+    .. code-block:: python
+
+        BACKBONE_REGISTRY = Registry('BACKBONE')
+
+    To register an object:
+
+    .. code-block:: python
+
+        @BACKBONE_REGISTRY.register()
+        class MyBackbone(nn.Module):
+            ...
+
+    Or:
+
+    .. code-block:: python
+
+        BACKBONE_REGISTRY.register(MyBackbone)
+    """
+
+    def __init__(self, name):
+        self._name = name
+        self._obj_map = dict()
+
+    def _do_register(self, name, obj, force=False):
+        if name in self._obj_map and not force:
+            raise KeyError(
+                'An object named "{}" was already '
+                'registered in "{}" registry'.format(name, self._name)
+            )
+
+        self._obj_map[name] = obj
+
+    def register(self, obj=None, force=False):
+        if obj is None:
+            # Used as a decorator
+            def wrapper(fn_or_class):
+                name = fn_or_class.__name__
+                self._do_register(name, fn_or_class, force=force)
+                return fn_or_class
+
+            return wrapper
+
+        # Used as a function call
+        name = obj.__name__
+        self._do_register(name, obj, force=force)
+
+    def get(self, name):
+        if name not in self._obj_map:
+            raise KeyError(
+                'Object name "{}" does not exist '
+                'in "{}" registry'.format(name, self._name)
+            )
+
+        return self._obj_map[name]
+
+    def registered_names(self):
+        return list(self._obj_map.keys())
+
+def init_network_weights(model, init_type="normal", gain=0.02):
+
+    def _init_func(m):
+        classname = m.__class__.__name__
+
+        if hasattr(m, "weight") and (
+            classname.find("Conv") != -1 or classname.find("Linear") != -1
+        ):
+            if init_type == "normal":
+                nn.init.normal_(m.weight.data, 0.0, gain)
+            elif init_type == "xavier":
+                nn.init.xavier_normal_(m.weight.data, gain=gain)
+            elif init_type == "kaiming":
+                nn.init.kaiming_normal_(m.weight.data, a=0, mode="fan_in")
+            elif init_type == "orthogonal":
+                nn.init.orthogonal_(m.weight.data, gain=gain)
+            else:
+                raise NotImplementedError(
+                    "initialization method {} is not implemented".
+                    format(init_type)
+                )
+            if hasattr(m, "bias") and m.bias is not None:
+                nn.init.constant_(m.bias.data, 0.0)
+
+        elif classname.find("BatchNorm") != -1:
+            nn.init.constant_(m.weight.data, 1.0)
+            nn.init.constant_(m.bias.data, 0.0)
+
+        elif classname.find("InstanceNorm") != -1:
+            if m.weight is not None and m.bias is not None:
+                nn.init.constant_(m.weight.data, 1.0)
+                nn.init.constant_(m.bias.data, 0.0)
+
+    model.apply(_init_func)
+
+def get_most_similar_str_to_a_from_b(a, b):
+    """Return the most similar string to a in b.
+
+    Args:
+        a (str): probe string.
+        b (list): a list of candidate strings.
+    """
+    highest_sim = 0
+    chosen = None
+    for candidate in b:
+        sim = SequenceMatcher(None, a, candidate).ratio()
+        if sim >= highest_sim:
+            highest_sim = sim
+            chosen = candidate
+    return chosen
+
+def check_availability(requested, available):
+    """Check if an element is available in a list.
+
+    Args:
+        requested (str): probe string.
+        available (list): a list of available strings.
+    """
+    if requested not in available:
+        psb_ans = get_most_similar_str_to_a_from_b(requested, available)
+        raise ValueError(
+            "The requested one is expected "
+            "to belong to {}, but got [{}] "
+            "(do you mean [{}]?)".format(available, requested, psb_ans)
+        )
 
 def print_log(print_string, log):
     print("{}".format(print_string))
     log.write('{}\n'.format(print_string))
     log.flush()
-
 
 
 def sort_metric(conf_array):
@@ -322,12 +534,3 @@ def sort_metric(conf_array):
                     last = j
         avg_change = (avg_change * i + 1.0 - changes / total) / (i+1)
     return avg_change
-
-if __name__ == '__main__':
-    result = np.load("tct_results_trans.npy", allow_pickle=True).item()
-    print(result)
-    # dataset = DistortImageFolder(root='/data5/zyl/patch_camelyon/test/', method='motion_blur', severity=1)
-    # data_loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=False, num_workers=8,
-    #                                      pin_memory=False, drop_last=True)
-    # for it, (data, class_l) in enumerate(data_loader):
-    #     print(data, class_l)
