@@ -23,7 +23,7 @@ Note that the parameter setting of corruption cannot be appropriate for all task
 These blow are the corrupted examples.
 
 **LocalTCT**
-![LocalTCT](LocalTCT_vis_sample.png)
+![LocalTCT](LocalTCT_vis_sample2.png)
 
 **Patchcamelyon**
 
