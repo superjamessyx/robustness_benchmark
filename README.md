@@ -24,7 +24,7 @@ is  reasonable  by visualizing one example. `LocalTCT_vis_sample.png` and `Patch
 in our dataset.
 
 
-**Citations**:
+**Citation:**
 ```
 @misc{https://doi.org/10.48550/arxiv.2206.14973,
   doi = {10.48550/ARXIV.2206.14973},
