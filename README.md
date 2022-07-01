@@ -27,7 +27,7 @@ These blow are the corrupted examples.
 
 **Patchcamelyon**
 
-![Patchcamelyon](Snipaste_2022-07-01_11-13-30.png)
+![Patchcamelyon](Patchcamelyon_vis_sample.png)
 
 ## **Citation:**
 
