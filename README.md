@@ -24,10 +24,12 @@ These blow are the corrupted examples.
 
 **LocalTCT**
 ![LocalTCT](LocalTCT_vis_sample.png)
+
 **Patchcamelyon**
+
 ![Patchcamelyon](Patchcamelyon_vis_sample.png)
 
-
+<img src="LocalTCT_vis_sample.png" alt="image-20220701110550872" style="zoom:33%;" />
 
 ## **Citation:**
 
