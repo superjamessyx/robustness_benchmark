@@ -29,7 +29,7 @@ These blow are the corrupted examples.
 
 ![Patchcamelyon](Patchcamelyon_vis_sample.png)
 
-<img src="LocalTCT_vis_sample.png" alt="image-20220701110550872" style="zoom:33%;" />
+<img src="LocalTCT_vis_sample.png" alt="image-20220701110550872" style="zoom:45%;" />
 
 ## **Citation:**
 
